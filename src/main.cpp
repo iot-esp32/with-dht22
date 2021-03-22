@@ -14,12 +14,12 @@
 struct __app_config {
     struct global {
         /*
-         * Miliseconds to sleep if all connectivity is ok
+         *  Miliseconds to sleep if all connectivity is ok
          */
         uint32_t sleep_time = 2000;
 
         /*
-         * Senzor name
+         *  Sensor name
          */
         const char * sensor_name = "dht22_s01";
     } global;
@@ -38,8 +38,6 @@ struct __app_config {
     struct wlan {
         const char * ssid = __WIFI_SSID__;
         const char * pass = __WIFI_PASS__;
-
-        WiFiClass * h;
     } wlan;
 
     struct ntp {
@@ -55,15 +53,84 @@ struct __app_config {
         const char * auth_user     = __MQTT_USER__;
         const char * auth_pass     = __MQTT_PASS__;
 
-        PubSubClient * h;
+        const char * mqtt_topic    = "s99/dht22_s01";
     } mqtt;
 } app;
+
+PubSubClient h_mqtt;
+WiFiClient h_wifi;
+
+void mqtt_init() {
+    log_d("setting mqtt server and port");
+    h_mqtt.setServer(app.mqtt.server, app.mqtt.server_port);
+
+    log_d("setting buffer size to 0 to disable whatever library set as max_size");
+    h_mqtt.setBufferSize(0);
+
+    log_d("setting networking client to WiFi");
+    h_mqtt.setClient(h_wifi);
+}
+
+boolean mqtt_connect() {    
+    boolean c_res;
+
+    log_d("connecting to mqtt server %s:%u", app.mqtt.server, app.mqtt.server_port);
+    c_res = h_mqtt.connect(
+              app.global.sensor_name,
+              app.mqtt.auth_user,
+              app.mqtt.auth_pass
+    );
+
+    if (c_res == false) {
+        log_e("could not connect to MQTT server %s:%u", app.mqtt.server, app.mqtt.server_port);
+    }
+    else {
+        log_i("connected to MQTT server");
+    }
+
+    return c_res;
+}
+
+boolean mqtt_send(char * buffer) {
+    boolean c_res;
+
+    c_res = h_mqtt.publish(app.mqtt.mqtt_topic, buffer);
+
+    if (c_res == true) {
+        log_d("sent %s to mqtt server", buffer);
+    }
+    else {
+        log_e("could not send %s to mqtt server", buffer);
+    }
+
+    return c_res;
+}
+
+void mqtt_disconnect() {
+    log_d("closing connection to mqtt server");
+    h_mqtt.disconnect();
+}
 
 time_t time_get_unix() {
     time_t rawtime;
 
     time(&rawtime);
     return rawtime;
+}
+
+char * time_get_ascii() {
+    static char buffer[128];
+    time_t rawtime;
+    struct tm * time_structure;
+
+    bzero(&buffer[0], 128);
+    time(&rawtime);
+    time_structure = localtime(&rawtime);
+    asctime_r(time_structure, &buffer[0]);
+
+    //remove \n from the end
+    buffer[strlen(buffer) - 1] = '\0';
+    return &buffer[0];
 }
 
 void printLocalTime() {
@@ -75,35 +142,6 @@ void printLocalTime() {
     Serial.println(asctime(t));
 }
 
-void _init_mqtt() {    
-    static PubSubClient * h;
-    static WiFiClient wifi_client;
-
-    h = new PubSubClient();
-
-    h->setServer(app.mqtt.server, app.mqtt.server_port);
-    h->setClient(wifi_client);
-
-    app.mqtt.h = h;
-}
-
-void _connect_to_mqtt() {
-    boolean connected;
-
-    connected = app.mqtt.h->connect(
-                              app.global.sensor_name,
-                              app.mqtt.auth_user,
-                              app.mqtt.auth_pass
-    );
-
-    if (connected == false) {
-        log_e("could not connect to MQTT server %s:%u", app.mqtt.server, app.mqtt.server_port);
-    }
-    else {
-        log_i("connected to MQTT server");
-    }
-}
-
 void _init_serial() {
     Serial.begin(app.serial.baud);
     Serial.println();
@@ -112,19 +150,13 @@ void _init_serial() {
 }
 
 boolean wifi_connect() {
-    static WiFiClass * wifi_h = NULL;
     uint8_t max_retries = 60;
-    uint8_t counter = 0;
-
-    if ( wifi_h != NULL) {
-        wifi_h = new WiFiClass();
-        app.wlan.h = wifi_h;
-    }
+    uint8_t counter = 0;    
 
     log_i("attempting to connect to wireless network %s", app.wlan.ssid);
-    wifi_h->begin(app.wlan.ssid, app.wlan.pass);
+    WiFi.begin(app.wlan.ssid, app.wlan.pass);
         
-    while (wifi_h->status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED) {
       log_i("still nothing. sleeping for half a second ...");
 
       if (counter++ >= max_retries) {
@@ -139,7 +171,7 @@ boolean wifi_connect() {
 }
 
 void wifi_disconnect() {
-    app.wlan.h->disconnect();
+    WiFi.disconnect();
 }
 
 dht * _read_sensor() {
@@ -203,23 +235,27 @@ void setup() {
 
     wifi_connect();
     time_init();
-    _init_mqtt();
+    mqtt_init();    
     wifi_disconnect();
 }
 
 void loop() {
-    char * readings;
+    Serial.println("########## BEGIN LOOP ##########");
+    log_i("%s", time_get_ascii());
 
-    readings = readings_to_json(_read_sensor());
-    Serial.println("###############################################################################");
     if (wifi_connect() == false) {
         return;
     }
 
-    printLocalTime();
-    _connect_to_mqtt();
-    app.mqtt.h->publish("99/s01", readings);
+    mqtt_connect();
+    mqtt_send(readings_to_json(_read_sensor()));
+    mqtt_disconnect();
     delay(2000);
+
+
     wifi_disconnect();
     delay(1000 * 10);
+
+    log_i("%s", time_get_ascii());
+    Serial.println("##########  END LOOP  ##########");
 }
