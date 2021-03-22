@@ -14,14 +14,14 @@
 struct __app_config {
     struct global {
         /*
-         *  Miliseconds to sleep if all connectivity is ok
+         *  Miliseconds to sleep between loop() iterations
          */
-        uint32_t sleep_time = 2000;
+        uint32_t sleep_time = 1000 * 60 * 2;
 
         /*
          *  Sensor name
          */
-        const char * sensor_name = "dht22_s01";
+        const char * sensor_name = __MQTT_SENSOR_NAME__;
     } global;
 
     struct serial {
@@ -38,10 +38,13 @@ struct __app_config {
     struct wlan {
         const char * ssid = __WIFI_SSID__;
         const char * pass = __WIFI_PASS__;
+
+        const uint16_t delay_between_connects = 500;
+        const uint8_t connect_max_retries = 60;
     } wlan;
 
     struct ntp {
-        const char * ntpServer = "pool.ntp.org";
+        const char * ntpServer = __NTP_SERVER__;
 
         //In seconds
         const uint8_t initial_sleep = 10;
@@ -53,7 +56,7 @@ struct __app_config {
         const char * auth_user     = __MQTT_USER__;
         const char * auth_pass     = __MQTT_PASS__;
 
-        const char * mqtt_topic    = "s99/dht22_s01";
+        const char * mqtt_topic    = __MQTT_TOPIC__;
     } mqtt;
 } app;
 
@@ -133,16 +136,17 @@ char * time_get_ascii() {
     return &buffer[0];
 }
 
-void printLocalTime() {
-    time_t rawtime;
-    struct tm * t;
+void time_init() {
+    log_i("initializing SNTP library with %s as server", app.ntp.ntpServer);
+    sntp_setservername(0, (char *)app.ntp.ntpServer);
+    sntp_init();
 
-    time(&rawtime);
-    t = localtime(&rawtime);
-    Serial.println(asctime(t));
+    log_i("waiting %d seconds to leave SNTP enough time to read time", (app.ntp.initial_sleep));
+    delay(app.ntp.initial_sleep * 1000);
+    log_i("sleeping time is over");
 }
 
-void _init_serial() {
+void serial_init() {
     Serial.begin(app.serial.baud);
     Serial.println();
 
@@ -150,20 +154,19 @@ void _init_serial() {
 }
 
 boolean wifi_connect() {
-    uint8_t max_retries = 60;
     uint8_t counter = 0;    
 
     log_i("attempting to connect to wireless network %s", app.wlan.ssid);
     WiFi.begin(app.wlan.ssid, app.wlan.pass);
         
     while (WiFi.status() != WL_CONNECTED) {
-      log_i("still nothing. sleeping for half a second ...");
-
-      if (counter++ >= max_retries) {
+      if (counter++ >= app.wlan.connect_max_retries) {
           log_i("still can't connect. bailing out ...");
           return false;
       }
-      delay(500);
+
+      log_i("still nothing. sleeping for %d miliseconds", app.wlan.delay_between_connects);
+      delay(app.wlan.delay_between_connects);
     }
 
     log_i("connected to %s", app.wlan.ssid);
@@ -174,7 +177,7 @@ void wifi_disconnect() {
     WiFi.disconnect();
 }
 
-dht * _read_sensor() {
+dht * dht_read_sensor() {
     static dht * sensor = new dht();
 
     switch (sensor->read22(app.dht.pin)) {
@@ -195,7 +198,7 @@ dht * _read_sensor() {
     return sensor;
 }
 
-char * readings_to_json(dht * sensor) {
+char * dht_readings_to_json(dht * sensor) {
     StaticJsonDocument<100> json;
     static char buffer[255];
 
@@ -215,23 +218,17 @@ char * readings_to_json(dht * sensor) {
 
     log_v("serializing json");
     memset(&buffer[0], 0, sizeof(buffer) - 1);
-    serializeJson(json, &buffer[0], 240);
+    serializeJson(json, &buffer[0], sizeof(buffer) - 1);
 
     return &buffer[0];
 }
 
-void time_init() {
-    log_i("initializing sntp library");
-    sntp_setservername(0, (char *)app.ntp.ntpServer);
-    sntp_init();
-
-    log_i("waiting %d seconds to get sntp time to read time", (app.ntp.initial_sleep));
-    delay(app.ntp.initial_sleep * 1000);
-    log_i("sleeping time is over");
+char * dht_read_json() {
+    return dht_readings_to_json(dht_read_sensor());
 }
 
 void setup() {
-    _init_serial();
+    serial_init();
 
     wifi_connect();
     time_init();
@@ -248,13 +245,13 @@ void loop() {
     }
 
     mqtt_connect();
-    mqtt_send(readings_to_json(_read_sensor()));
+    mqtt_send(dht_read_json());
     mqtt_disconnect();
     delay(2000);
 
 
     wifi_disconnect();
-    delay(1000 * 10);
+    delay(app.global.sleep_time);
 
     log_i("%s", time_get_ascii());
     Serial.println("##########  END LOOP  ##########");
