@@ -111,8 +111,10 @@ void _init_serial() {
     delay(app.serial.initial_wait);
 }
 
-void wifi_connect() {
+boolean wifi_connect() {
     static WiFiClass * wifi_h = NULL;
+    uint8_t max_retries = 60;
+    uint8_t counter = 0;
 
     if ( wifi_h != NULL) {
         wifi_h = new WiFiClass();
@@ -124,10 +126,16 @@ void wifi_connect() {
         
     while (wifi_h->status() != WL_CONNECTED) {
       log_i("still nothing. sleeping for half a second ...");
+
+      if (counter++ >= max_retries) {
+          log_i("still can't connect. bailing out ...");
+          return false;
+      }
       delay(500);
     }
 
     log_i("connected to %s", app.wlan.ssid);
+    return true;
 }
 
 void wifi_disconnect() {
@@ -195,21 +203,23 @@ void setup() {
 
     wifi_connect();
     time_init();
+    _init_mqtt();
     wifi_disconnect();
 }
 
 void loop() {
+    char * readings;
+
+    readings = readings_to_json(_read_sensor());
     Serial.println("###############################################################################");
+    if (wifi_connect() == false) {
+        return;
+    }
+
     printLocalTime();
-    delay(1000 * 10);
-    return;
-
-
-    wifi_connect();
-    Serial.println("sleeping 1s");
-    delay(1000);
-    Serial.println("done");
+    _connect_to_mqtt();
+    app.mqtt.h->publish("99/s01", readings);
+    delay(2000);
     wifi_disconnect();
-
-    delay(1000 * 60 * 2);
+    delay(1000 * 10);
 }
