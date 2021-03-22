@@ -5,22 +5,23 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <esp_log.h>
+#include <lwip/apps/sntp.h>
 
-#define STATUS_OK 0
-#define STATUS_NOT_OK 1
-
-struct __app_state {
-    u_char global = STATUS_NOT_OK;
-    u_char wireless = STATUS_NOT_OK;
-    u_char mqtt = STATUS_NOT_OK;
-} app_state;
+#ifndef __MQTT_SERVER_PORT__
+#define __MQTT_SERVER_PORT__ 1883
+#endif
 
 struct __app_config {
     struct global {
         /*
          * Miliseconds to sleep if all connectivity is ok
          */
-        uint32_t sleep_time = 60000;
+        uint32_t sleep_time = 2000;
+
+        /*
+         * Senzor name
+         */
+        const char * sensor_name = "dht22_s01";
     } global;
 
     struct serial {
@@ -29,6 +30,10 @@ struct __app_config {
         //Wait for these ms for serial to become available
         uint32_t initial_wait = 500;
     } serial;
+
+    struct dht {
+        const uint8_t pin = 13;
+    } dht;
 
     struct wlan {
         const char * ssid = __WIFI_SSID__;
@@ -39,20 +44,65 @@ struct __app_config {
 
     struct ntp {
         const char * ntpServer = "pool.ntp.org";
-        const long   gmtOffset_sec = 0;
-        const int    daylightOffset_sec = 0;    
+
+        //In seconds
+        const uint8_t initial_sleep = 10;
     } ntp;
 
     struct mqtt {
-        const char * server_ip = __MQTT_SERVER__;
-        const char * auth_user = __MQTT_USER__;
-        const char * auth_pass = __MQTT_PASS__;
+        const char * server        = __MQTT_SERVER__;
+        const uint16_t server_port = __MQTT_SERVER_PORT__;
+        const char * auth_user     = __MQTT_USER__;
+        const char * auth_pass     = __MQTT_PASS__;
 
-        IPAddress h;
+        PubSubClient * h;
     } mqtt;
 } app;
 
-TaskHandle_t comm_t;
+time_t time_get_unix() {
+    time_t rawtime;
+
+    time(&rawtime);
+    return rawtime;
+}
+
+void printLocalTime() {
+    time_t rawtime;
+    struct tm * t;
+
+    time(&rawtime);
+    t = localtime(&rawtime);
+    Serial.println(asctime(t));
+}
+
+void _init_mqtt() {    
+    static PubSubClient * h;
+    static WiFiClient wifi_client;
+
+    h = new PubSubClient();
+
+    h->setServer(app.mqtt.server, app.mqtt.server_port);
+    h->setClient(wifi_client);
+
+    app.mqtt.h = h;
+}
+
+void _connect_to_mqtt() {
+    boolean connected;
+
+    connected = app.mqtt.h->connect(
+                              app.global.sensor_name,
+                              app.mqtt.auth_user,
+                              app.mqtt.auth_pass
+    );
+
+    if (connected == false) {
+        log_e("could not connect to MQTT server %s:%u", app.mqtt.server, app.mqtt.server_port);
+    }
+    else {
+        log_i("connected to MQTT server");
+    }
+}
 
 void _init_serial() {
     Serial.begin(app.serial.baud);
@@ -61,11 +111,12 @@ void _init_serial() {
     delay(app.serial.initial_wait);
 }
 
-void _setup_wifi() {
+void wifi_connect() {
     static WiFiClass * wifi_h = NULL;
 
     if ( wifi_h != NULL) {
         wifi_h = new WiFiClass();
+        app.wlan.h = wifi_h;
     }
 
     log_i("attempting to connect to wireless network %s", app.wlan.ssid);
@@ -75,245 +126,90 @@ void _setup_wifi() {
       log_i("still nothing. sleeping for half a second ...");
       delay(500);
     }
+
     log_i("connected to %s", app.wlan.ssid);
-
-    log_d("setting wireless status to ok");
-    app_state.wireless = STATUS_OK;
-
-    log_d("saving wireless handler");
-    app.wlan.h = wifi_h;
 }
 
-void _init_ntp() {
-    log_d("sleeping for 2 seconds before calling NTP server");
-    delay(2000);
-
-    log_i("getting time from ntp server %s", app.ntp.ntpServer);
-    configTime(app.ntp.gmtOffset_sec, app.ntp.daylightOffset_sec, app.ntp.ntpServer);
-    log_d("we've got the time ! (note: configTime() has void return type so we don't actually know if call succeeded or not");
+void wifi_disconnect() {
+    app.wlan.h->disconnect();
 }
 
-void _start_comm(void * nothing) {
-    _setup_wifi();
-    _init_ntp();
+dht * _read_sensor() {
+    static dht * sensor = new dht();
 
-    while (1) {
-        if (app.wlan.h->status() != WL_CONNECTED) {
-            log_i("wireless status is not Connected. Initiating connect");            
-            _setup_wifi();
+    switch (sensor->read22(app.dht.pin)) {
+        case DHTLIB_ERROR_CHECKSUM:
+            log_e("checksum error reading DHT22 on pin %u", app.dht.pin);
+            return NULL;
+            break;
 
-            //we don't sync time again because time is supposed to flow with or without Internet access
-        }
-
-        delay(app.global.sleep_time);
+        case DHTLIB_ERROR_TIMEOUT:
+            log_e("timeout reading DHT22 on pin %u", app.dht.pin);
+            return NULL;
+            break;
+    
+        default:
+            break;
     }
+
+    return sensor;
+}
+
+char * readings_to_json(dht * sensor) {
+    StaticJsonDocument<100> json;
+    static char buffer[255];
+
+    if (sensor == NULL) {
+        return NULL;
+    }
+
+    log_v("preparing json document");
+
+    log_v("humidity is %f", sensor->humidity);
+    json["humidity"]      = sensor->humidity;
+    
+    log_v("temperature is %f", sensor->temperature);
+    json["temperature"]   = sensor->temperature;
+
+    json["time_read"] = time_get_unix();
+
+    log_v("serializing json");
+    memset(&buffer[0], 0, sizeof(buffer) - 1);
+    serializeJson(json, &buffer[0], 240);
+
+    return &buffer[0];
+}
+
+void time_init() {
+    log_i("initializing sntp library");
+    sntp_setservername(0, (char *)app.ntp.ntpServer);
+    sntp_init();
+
+    log_i("waiting %d seconds to get sntp time to read time", (app.ntp.initial_sleep));
+    delay(app.ntp.initial_sleep * 1000);
+    log_i("sleeping time is over");
 }
 
 void setup() {
     _init_serial();
 
-    log_d("creating communications task");
-    BaseType_t xReturned = xTaskCreatePinnedToCore(_start_comm, "communications_task", 10000, NULL, 0, &comm_t, 0);
-    if (xReturned != pdPASS) {
-        log_e("something went wrong while creating the parallelization task. halting ...");
-        while (1) {
-            delay(1000000);
-        }
-    }
-    
-}
-/*
-void setup3() { 
-
-    WiFi.onEvent(WiFiEvent);
-
-    WiFi.begin(ssid, pass);
-    Serial.print("Connecting to wireless network ");
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-
-    Serial.println();
-    Serial.println("Waiting 2 seconds for wireless to settle before getting time from NTP server");
-    delay(2000);
-
-    //init and get the time
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-    Serial.print("LIBRARY VERSION: ");
-    Serial.println(DHT_LIB_VERSION);
-    Serial.println();
-    Serial.println("Type,\tstatus,\tHumidity (%),\tTemperature (C)\tTime (us)");
-
-//    mqtt_client.connect("esp32_Client", mqtt_user, mqtt_pass);
-}
-*/
-
-const IPAddress mqtt_server(18, 195, 106, 0);
-
-#define DHT22_PIN 13
-
-WiFiClient wifi_client;
-PubSubClient mqtt_client(mqtt_server, 1883, NULL, wifi_client);
-
-StaticJsonDocument<256> temp_reading;
-
-typedef StaticJsonDocument<256> j_dht;
-
-
-const char * read_dht_to_json() {
-    dht DHT;
-    uint32_t start, stop;
-    int op_code;
-    j_dht reading;
-    static String json_doc;
-
-    memset(&json_doc, 0, 256);
-
-    start = micros();
-    op_code = DHT.read22(DHT22_PIN);
-    stop = micros();
-
-    reading["read_duration"] = stop - start;
-    reading["humidity"] = DHT.humidity;
-    reading["temperature"] = DHT.temperature;
-    reading["timestamp"] = "test";
-    reading["error_code"] = op_code;
-
-    serializeJson(reading, json_doc);
-
-    return json_doc.c_str();
-}
-
-void printLocalTime()
-{
-  struct tm timeinfo;
-
-  if(!getLocalTime(&timeinfo)){
-    Serial.print("failed to obtain time");
-    return;
-  }
-
-  Serial.print(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-}
-
-void WiFiEvent(WiFiEvent_t event)
-{
-    printLocalTime();
-    Serial.printf(" [WiFi-event] event_id: %d - ", event);
-
-    switch (event) {
-        case SYSTEM_EVENT_WIFI_READY:
-            Serial.println("WiFi interface ready");
-            break;
-        case SYSTEM_EVENT_SCAN_DONE:
-            Serial.println("Completed scan for access points");
-            break;
-        case SYSTEM_EVENT_STA_START:
-            Serial.println("WiFi client started");
-            break;
-        case SYSTEM_EVENT_STA_STOP:
-            Serial.println("WiFi clients stopped");
-            break;
-        case SYSTEM_EVENT_STA_CONNECTED:
-            Serial.println("Connected to access point");
-            break;
-        case SYSTEM_EVENT_STA_DISCONNECTED:
-            Serial.println("Disconnected from WiFi access point");
-            break;
-        case SYSTEM_EVENT_STA_AUTHMODE_CHANGE:
-            Serial.println("Authentication mode of access point has changed");
-            break;
-        case SYSTEM_EVENT_STA_GOT_IP:
-            Serial.print("Obtained IP address: ");
-            Serial.println(WiFi.localIP());
-            break;
-        case SYSTEM_EVENT_STA_LOST_IP:
-            Serial.println("Lost IP address and IP address is reset to 0");
-            break;
-        case SYSTEM_EVENT_STA_WPS_ER_SUCCESS:
-            Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode");
-            break;
-        case SYSTEM_EVENT_STA_WPS_ER_FAILED:
-            Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode");
-            break;
-        case SYSTEM_EVENT_STA_WPS_ER_TIMEOUT:
-            Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode");
-            break;
-        case SYSTEM_EVENT_STA_WPS_ER_PIN:
-            Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode");
-            break;
-        case SYSTEM_EVENT_AP_START:
-            Serial.println("WiFi access point started");
-            break;
-        case SYSTEM_EVENT_AP_STOP:
-            Serial.println("WiFi access point  stopped");
-            break;
-        case SYSTEM_EVENT_AP_STACONNECTED:
-            Serial.println("Client connected");
-            break;
-        case SYSTEM_EVENT_AP_STADISCONNECTED:
-            Serial.println("Client disconnected");
-            break;
-        case SYSTEM_EVENT_AP_STAIPASSIGNED:
-            Serial.println("Assigned IP address to client");
-            break;
-        case SYSTEM_EVENT_AP_PROBEREQRECVED:
-            Serial.println("Received probe request");
-            break;
-        case SYSTEM_EVENT_GOT_IP6:
-            Serial.println("IPv6 is preferred");
-            break;
-        case SYSTEM_EVENT_ETH_START:
-            Serial.println("Ethernet started");
-            break;
-        case SYSTEM_EVENT_ETH_STOP:
-            Serial.println("Ethernet stopped");
-            break;
-        case SYSTEM_EVENT_ETH_CONNECTED:
-            Serial.println("Ethernet connected");
-            break;
-        case SYSTEM_EVENT_ETH_DISCONNECTED:
-            Serial.println("Ethernet disconnected");
-            break;
-        case SYSTEM_EVENT_ETH_GOT_IP:
-            Serial.println("Obtained IP address");
-            break;
-        default: break;
-    }}
-
-void setup2() {
-    Serial.begin(115200);
-    Serial.println();
-    delay(1000);
-
-    WiFi.onEvent(WiFiEvent);
-
-    WiFi.begin(ssid, pass);
-    Serial.print("Connecting to wireless network ");
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-
-    Serial.println();
-    Serial.println("Waiting 2 seconds for wireless to settle before getting time from NTP server");
-    delay(2000);
-
-    //init and get the time
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-    Serial.print("LIBRARY VERSION: ");
-    Serial.println(DHT_LIB_VERSION);
-    Serial.println();
-    Serial.println("Type,\tstatus,\tHumidity (%),\tTemperature (C)\tTime (us)");
-
-//    mqtt_client.connect("esp32_Client", mqtt_user, mqtt_pass);
+    wifi_connect();
+    time_init();
+    wifi_disconnect();
 }
 
 void loop() {
- //   mqtt_client.publish("99/s01", read_dht_to_json());
+    Serial.println("###############################################################################");
+    printLocalTime();
+    delay(1000 * 10);
+    return;
 
+
+    wifi_connect();
+    Serial.println("sleeping 1s");
     delay(1000);
+    Serial.println("done");
+    wifi_disconnect();
+
+    delay(1000 * 60 * 2);
 }
