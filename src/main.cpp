@@ -14,9 +14,9 @@
 struct __app_config {
     struct global {
         /*
-         *  Miliseconds to sleep if all connectivity is ok
+         *  Miliseconds to sleep between loop() iterations
          */
-        uint32_t sleep_time = 2000;
+        uint32_t sleep_time = 1000 * 60 * 2;
 
         /*
          *  Sensor name
@@ -167,7 +167,7 @@ void wifi_disconnect() {
     WiFi.disconnect();
 }
 
-dht * _read_sensor() {
+dht * dht_read_sensor() {
     static dht * sensor = new dht();
 
     switch (sensor->read22(app.dht.pin)) {
@@ -188,7 +188,7 @@ dht * _read_sensor() {
     return sensor;
 }
 
-char * readings_to_json(dht * sensor) {
+char * dht_readings_to_json(dht * sensor) {
     StaticJsonDocument<100> json;
     static char buffer[255];
 
@@ -208,9 +208,13 @@ char * readings_to_json(dht * sensor) {
 
     log_v("serializing json");
     memset(&buffer[0], 0, sizeof(buffer) - 1);
-    serializeJson(json, &buffer[0], 240);
+    serializeJson(json, &buffer[0], sizeof(buffer) - 1);
 
     return &buffer[0];
+}
+
+char * dht_read_json() {
+    return dht_readings_to_json(dht_read_sensor());
 }
 
 void time_init() {
@@ -241,13 +245,13 @@ void loop() {
     }
 
     mqtt_connect();
-    mqtt_send(readings_to_json(_read_sensor()));
+    mqtt_send(dht_read_json());
     mqtt_disconnect();
     delay(2000);
 
 
     wifi_disconnect();
-    delay(1000 * 60 * 2);
+    delay(app.global.sleep_time);
 
     log_i("%s", time_get_ascii());
     Serial.println("##########  END LOOP  ##########");
