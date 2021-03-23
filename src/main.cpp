@@ -21,7 +21,7 @@ struct __app_config {
         /*
          *  Sensor name
          */
-        const char * sensor_name = "__MQTT_SENSOR_NAME__";
+        const char * sensor_name = __MQTT_SENSOR_NAME__;
     } global;
 
     struct serial {
@@ -44,7 +44,7 @@ struct __app_config {
     } wlan;
 
     struct ntp {
-        const char * ntpServer = "__NTP_SERVER__";
+        const char * ntp_server = __NTP_SERVER__;
 
         //In seconds
         const uint8_t initial_sleep = 10;
@@ -56,7 +56,7 @@ struct __app_config {
         const char * auth_user     = __MQTT_USER__;
         const char * auth_pass     = __MQTT_PASS__;
 
-        const char * mqtt_topic    = "__MQTT_TOPIC__";
+        const char * mqtt_topic    = __MQTT_TOPIC__;
     } mqtt;
 } app;
 
@@ -136,6 +136,21 @@ char * time_get_ascii() {
     return &buffer[0];
 }
 
+void time_init() {
+    char buffer[128];
+
+    bzero(&buffer[0], sizeof(buffer));
+    strncpy(&buffer[0], app.ntp.ntp_server, sizeof(buffer) - 1);
+
+    log_i("initializing SNTP library with %s as server", app.ntp.ntp_server);
+    sntp_setservername(0, &buffer[0]);
+    sntp_init();
+
+    log_i("waiting %d seconds to leave SNTP enough time to read time", (app.ntp.initial_sleep));
+    delay(app.ntp.initial_sleep * 1000);
+    log_i("sleeping time is over. time is now %s", time_get_ascii());
+}
+
 void serial_init() {
     Serial.begin(app.serial.baud);
     Serial.println();
@@ -174,12 +189,10 @@ dht * dht_read_sensor() {
         case DHTLIB_ERROR_CHECKSUM:
             log_e("checksum error reading DHT22 on pin %u", app.dht.pin);
             return NULL;
-            break;
 
         case DHTLIB_ERROR_TIMEOUT:
             log_e("timeout reading DHT22 on pin %u", app.dht.pin);
             return NULL;
-            break;
     
         default:
             break;
@@ -217,16 +230,6 @@ char * dht_read_json() {
     return dht_readings_to_json(dht_read_sensor());
 }
 
-void time_init() {
-    log_i("initializing SNTP library");
-    sntp_setservername(0, (char *)app.ntp.ntpServer);
-    sntp_init();
-
-    log_i("waiting %d seconds to leave SNTP enough time to read time", (app.ntp.initial_sleep));
-    delay(app.ntp.initial_sleep * 1000);
-    log_i("sleeping time is over");
-}
-
 void setup() {
     serial_init();
 
@@ -242,6 +245,11 @@ void loop() {
 
     if (wifi_connect() == false) {
         return;
+    }
+
+    //if we are in the first year of 1970, we failed to sync time. Let's try again
+    if (time_get_unix() < 3600 * 24 * 365) {
+        time_init();
     }
 
     mqtt_connect();
