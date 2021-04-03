@@ -16,7 +16,7 @@ struct __app_config {
         /*
          *  Miliseconds to sleep between loop() iterations
          */
-        uint32_t sleep_time = 1000 * 60 * 2;
+        uint32_t sleep_time = 1000 * 60 * 5;
 
         /*
          *  Sensor name
