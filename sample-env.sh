@@ -1,0 +1,8 @@
+export WIFI_SSID=""
+export WIFI_PASS=""
+export MQTT_SERVER=""
+export MQTT_USER=""
+export MQTT_PASS=""
+export MQTT_SENSOR_NAME="dht22_s01"
+export MQTT_TOPIC="s99/${MQTT_SENSOR_NAME}"
+export NTP_SERVER="pool.ntp.org"

@@ -207,7 +207,7 @@ dht * dht_read_sensor() {
 char * dht_readings_to_json(dht * sensor) {
     static char buffer[255];
     StaticJsonDocument<255> json;
-    JsonObject j_nested;    
+    JsonObject j_nested;
 
     if (sensor == NULL) {
         return NULL;
