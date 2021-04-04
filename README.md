@@ -22,9 +22,12 @@ platformio lib install DHTStable
 platformio lib install PubSubClient
 platformio lib install "Uptime Library"
 ```
-2. adapt build_flags from [platformio.ini](https://github.com/iot-esp32/with-dht22/blob/main/platformio.ini)
-3. update [sample-env.sh](https://github.com/iot-esp32/with-dht22/blob/main/sample-env.sh)
-4. build and run the project
+1. adapt build_flags from [platformio.ini](https://github.com/iot-esp32/with-dht22/blob/main/platformio.ini)
+1. update [sample-env.sh](https://github.com/iot-esp32/with-dht22/blob/main/sample-env.sh)
+1. update [main.cpp](https://github.com/iot-esp32/with-dht22/blob/main/src/main.cpp) and ensure you set:
+   1. [sensor name, family and location](https://github.com/iot-esp32/with-dht22/blob/main/src/main.cpp#L24)
+   1. [sleep_time](https://github.com/iot-esp32/with-dht22/blob/main/src/main.cpp#L21)
+1. build and run the project
 ```bash
 source sample-env.sh
 platformio run -t upload && platformio device monitor --baud 115200
