@@ -1,7 +1,7 @@
 # Home IoT skeleton application
 
 ## About
-This project is a small code base that can be used for reading DHT22 sensors on ESP32 boards and sending the results to a MQTT server in JSON format.
+This project is a small code base that can be used for reading DHT22 sensors attached on ESP32 boards and sending the results to a MQTT server in JSON format.
 
 Included:
 1. code for ESP32 that:
