@@ -18,6 +18,7 @@ I used PlatformIO as IDE. Why ? Because I like it. Steps to build (without UI):
 platformio lib install ArduinoJson
 platformio lib install DHTStable
 platformio lib install PubSubClient
+platformio lib install "Uptime Library"
 ```
 2. adapt build_flags from [platformio.ini](https://github.com/iot-esp32/with-dht22/blob/main/platformio.ini)
 3. update [sample-env.sh](https://github.com/iot-esp32/with-dht22/blob/main/sample-env.sh)
