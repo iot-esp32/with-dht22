@@ -6,6 +6,8 @@
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <lwip/apps/sntp.h>
+#include <uptime.h>
+#include <uptime_formatter.h>
 
 #ifndef __MQTT_SERVER_PORT__
 #define __MQTT_SERVER_PORT__ 1883
@@ -16,13 +18,14 @@ struct __app_config {
         /*
          *  Miliseconds to sleep between loop() iterations
          */
-        uint32_t sleep_time = 1000 * 60 * 5;
-
-        /*
-         *  Sensor name
-         */
-        const char * sensor_name = __MQTT_SENSOR_NAME__;
+        uint32_t sleep_time = 1000 * 60 * 1;
     } global;
+
+    struct sensor {
+        const char * name = "s01";
+        const char * family = "dht22";
+        const char * location = "geam";
+    } sensor;
 
     struct serial {
         unsigned long baud = 115200;
@@ -44,7 +47,7 @@ struct __app_config {
     } wlan;
 
     struct ntp {
-        const char * ntp_server = __NTP_SERVER__;
+        const char * ntp_server = "pool.ntp.org";
 
         //In seconds
         const uint8_t initial_sleep = 10;
@@ -79,7 +82,7 @@ boolean mqtt_connect() {
 
     log_d("connecting to mqtt server %s:%u", app.mqtt.server, app.mqtt.server_port);
     c_res = h_mqtt.connect(
-              app.global.sensor_name,
+              app.sensor.name,
               app.mqtt.auth_user,
               app.mqtt.auth_pass
     );
@@ -202,14 +205,24 @@ dht * dht_read_sensor() {
 }
 
 char * dht_readings_to_json(dht * sensor) {
-    StaticJsonDocument<100> json;
     static char buffer[255];
+    StaticJsonDocument<255> json;
+    JsonObject j_nested;    
 
     if (sensor == NULL) {
         return NULL;
     }
 
     log_v("preparing json document");
+
+    j_nested = json.createNestedObject("sensor");
+    j_nested["name"] = app.sensor.name;
+    j_nested["family"] = app.sensor.family;
+    j_nested["location"] = app.sensor.location;
+
+    j_nested = json.createNestedObject("uptime");
+    j_nested["seconds"] = uptime::getDays() * 86400 + uptime::getHours() * 3600 + uptime::getMinutes() * 60 + uptime::getSeconds();
+    j_nested["formatted"] = uptime_formatter::getUptime();
 
     log_v("humidity is %f", sensor->humidity);
     json["humidity"]      = sensor->humidity;

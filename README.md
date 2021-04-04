@@ -9,3 +9,7 @@ This application's purpose is to provide a working skeleton for those who want t
 
 ### Supported sensors
 1. DHT32
+
+
+### ToDo
+1. implement a single send over multiple readings for saving energy. Ex: 1 minute readings sent every 10 minutes
